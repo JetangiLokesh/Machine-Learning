@@ -1,0 +1,276 @@
+---
+title: "fml-final exam"
+author: "LOKESH JETANGI"
+date: "2023-05-08"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r}
+#install.packages("dplyr")
+#install.packages("caret")
+#install.packages("factoextra")
+#install.packages("dbscan")
+#install.packages("leaps")
+#install.packages("esquisse")
+library(dplyr)
+library(caret)
+library(factoextra)
+library(leaps)
+library(dbscan)
+library(esquisse)
+```
+
+```{r}
+fuel_receipts_data<-read.csv("C:/Users/jetan/Downloads/fuel_receipts_costs_eia923.csv")
+summary(fuel_receipts_data)
+
+```
+
+```{r}
+library(dplyr)
+
+# Replacing empty strings with NA
+Na <- fuel_receipts_data %>% mutate_all(~ifelse(.=="", NA, .))
+
+# Getting the percentages of the null values in each column
+missing_values <- Na %>% summarise_all(~mean(is.na(.))*100)
+
+# Removing variables with null values having percentage more than 50 percent 
+# and few other variables which don't add much contribution to the analysis
+fuel_receipts_data_1 <- Na %>% select(-c(1:5, 7:8, 12:14, 22:25, 26:30))
+
+```
+
+
+```{r}
+# Random sampling of 2% fuel_receipts_data:
+set.seed(2467)
+fuel_receipts_data_2 <- fuel_receipts_data_1 %>% sample_n(size = 12000)
+
+```
+
+
+
+```{r}
+# Create dummy variables for fuel_type_code_pudl
+New_fuel_receipts_data <- fuel_receipts_data_2 %>%
+  mutate(
+    fuel_type_coal = ifelse(fuel_type_code_pudl == "coal", 1, 0),
+    fuel_type_gas = ifelse(fuel_type_code_pudl == "gas", 1, 0),
+    fuel_type_oil = ifelse(fuel_type_code_pudl == "oil", 1, 0)
+  ) %>%
+  select(-fuel_type_code_pudl)
+
+```
+
+
+```{r}
+# Splitting fuel_receipts_data into training and test:
+set.seed(1234)  # set seed for reproducibility
+#install.packages("caret")
+library(caret)  # load caret package
+trainIndex <- createDataPartition(New_fuel_receipts_data$fuel_received_units, p = .75, list = FALSE)
+training <- New_fuel_receipts_data[trainIndex, ]
+testing <- New_fuel_receipts_data[-trainIndex, ]
+training[is.na(training)] <- 0  # replacing NAs with 0s in the training set
+testing[is.na(testing)] <- 0  # replacing NAs with 0s in the testing set
+
+```
+
+
+
+#The k-means algorithm was selected as the initial strategy. However, once it was discovered that the k-means clusters were overlapping, it became clear that the fuel_receipts_data had outliers and boundary points. I did not want to continue my study with those clusters because the variation between them was too minor.
+
+```{r}
+#DBSCAN algorithm was the next idea that came to me right away because of how well it handles border points and outliers.
+
+#Selecting numerical fuel_receipts_data to form clusters:
+Training_numerical<-training[,c(4:9,11:13)]
+#Normalizing the fuel_receipts_data:
+Training_norm<-scale(Training_numerical)
+```
+
+
+```{r}
+dbscan::kNNdistplot(Training_norm, k =  2)
+abline(h = 0.5,col="red")
+```
+
+
+#Based on the figure above, we choose an epsilon value of 0.5. After a few    experiments were conducted with various values, minPts was selected. When            the value of minPts was set to 100, I obtained 3 perfect clusters with a           higher level of cluster variation.
+
+```{r}
+db <- dbscan::dbscan(Training_norm, eps = 0.5, minPts = 100)
+db
+```
+#The fuel_receipts_data contains 846 border points and has been organized into 3 clusters with 2637, 4753, and 764 fuel_receipts_data points in each cluster, respectively.
+
+```{r}
+#library(factoextra)
+#library(ggplot2)
+
+# Calculate correlation matrix
+correlation <- cor(Training_numerical)
+
+# Plot correlation matrix
+ggcorrplot::ggcorrplot(correlation, outline.color = "grey50", lab = TRUE, hc.order = TRUE, 
+           type = "full")
+
+```
+```{r}
+#Elbow chart and the Silhouette Method
+#To determine the number of clusters to do the cluster analysis using Elbow Method
+set.seed(123)
+wss<- vector()
+for(i in 1:9 )wss[i]<- sum(kmeans(Training_numerical,i) $withinss)
+plot(1:9, wss, type = "b", main =paste("optimal number of clusters"),
+ xlab = "Number of Clusters",
+ ylab = "Total within sum of squares")
+
+```
+
+```{r}
+#Silhouette method for determining number of clusters
+fviz_nbclust(Training_numerical, kmeans, method = "silhouette")
+```
+
+
+```{r}
+library(factoextra)
+# Plotting the clusters for better fuel_receipts_data visualization:
+fviz_cluster(db,Training_numerical, main = "3 clusters")
+
+# Assigning clusters to the original fuel_receipts_data:
+assigned_fuel_receipts_data <- cbind(Training_numerical, db$cluster)
+
+# Finding mean within each cluster to interpret the clusters:
+mean_k3 <- Training_numerical %>%
+  mutate(Cluster = db$cluster) %>%
+  group_by(Cluster) %>%
+  summarise_all(mean)
+head(mean_k3)
+
+```
+
+
+
+#It is clear that each fuel type belongs to a specific cluster. As a result, the basis of my examination of each cluster is the fuel type.
+
+
+#clusters Names
+
+#1stCluster : Gas,2ndCluster : Oil,3RdCluster : Coal
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+plots <- training[, c(1:3, 10)] %>% mutate(Clusters = db$cluster)
+
+plot1 <- ggplot(plots, mapping = aes(factor(Clusters), fill = contract_type_code_label)) +
+  geom_bar(position = 'dodge') +
+  labs(x = 'Clusters')
+plot1
+plot2 <- ggplot(plots, mapping = aes(factor(Clusters), fill = energy_source_code_label)) +
+  geom_bar(position = 'dodge') +
+  labs(x = 'Clusters')
+plot2
+plot3 <- ggplot(plots, mapping = aes(factor(Clusters), fill = fuel_group_code)) +
+  geom_bar(position = 'dodge') +
+  labs(x = 'Clusters')
+plot3
+plot4 <- ggplot(plots, mapping = aes(factor(Clusters), fill = primary_transportation_mode_code)) +
+  geom_bar(position = 'dodge') +
+  labs(x = 'Clusters')
+plot4
+```
+
+#Analysis for the clusters
+
+#Cluster 1: Gas
+#The fuel with the lowest average price per mmbtu is gas. That also explains         why it supplied the most average fuel units.Gas is a wonderful fuel to utilize    because it doesn't contain any ash, sulfur, or mercury.It also has the lowest     average fuel mmbtu per unit. This implies that fuel produces less heat than usual.According to the graph, the majority of gas-type fuel is bought on the       spot, and just a small amount is bought on a contract.Natural gas is the energy    source code, and pipelines(PL) are the most widely utilized form of        transportation to supply this kind of fuel. 
+
+#Cluster 2: Oil
+#Oil is the most costly fuel in the USA with an average cost per mmbtu                of $10.49. Because oil is the most expensive fuel type, it is received on         average in far lower quantities than gas and coal.Even oil doesn't contain          much ash or mercury, but it does include a little amount of sulfur.The graphs        show that oil is only bought on the spot. There have been no purchases made        under contracts. This fuel type's energy source code is DFO, which stands for distillate fuel oil and also
+
+#Cluster 3: Coal
+#The cheapest fuel is coal, which is also abundantly available in the USA.            It has ash, sulfur, and mercury levels, unlike the other two fuels.The typical    amount of heat energy from coal is 21.5612.The categorical variable graphs show     that the majority of coal is bought on the spot.This fuel's energy source code        is BIT and SUB, which denotes that conventional steam coal is most commonly      provided in the United States.
+
+#Extra-Credit
+```{r}
+## Fit a multiple linear regression model to predict fuel_cost_per_mmbtu using the variables that were used to form clusters:
+model <- lm(fuel_cost_per_mmbtu ~ .,  Training_numerical)
+summary(model)
+
+# The variables "fuel_received_units", "fuel_type_coal", and "fuel_type_oil" have the strongest impact on predicting fuel_cost_per_mmbtu.
+
+# Check the performance of the model on the test fuel_receipts_data:
+Test_data<- testing[,c(4:9,11:13)]
+Test_Model<-predict(model, data = Test_data)
+```
+```{r}
+#install.packages("dplyr")
+
+#library(dplyr)
+
+# Normalize test data
+Test_norm <- scale(Test_data)
+
+# Predict clusters for test data
+Testing_clusters <- predict(db, newdata = Test_norm, data = Training_norm)
+
+# Append cluster information and predicted fuel cost per unit values to the test data
+Test_predicted_data <- cbind(Test_data, Test_Model, Testing_clusters)
+
+# Display the first few rows of the updated test data
+head(Test_predicted_data)
+
+# Find the averages to see how close the predicted values are to the actual fuel_cost values
+mean_Predicted_Test <- Test_predicted_data %>% 
+                       mutate(Cluster = Testing_clusters) %>% 
+                       group_by(Cluster) %>% 
+                       summarise_all("mean")
+
+# Display the first few rows of the mean predicted test data
+head(mean_Predicted_Test)
+
+
+```
+
+#It was clear that there was a significant gap between expected and actual results.
+```{r}
+#install.packages("magrittr")
+library(magrittr)
+library(dplyr)
+
+# Re-running the cluster information with chosen variables:
+Model_new <- lm(fuel_cost_per_mmbtu ~ fuel_received_units + fuel_type_coal + fuel_type_gas, data = Test_predicted_data)
+summary(Model_new)
+
+# Predicting the new model on testing again to verify if there is any difference in prediction by choosing the variables with significant importance:
+Prediction_on_test <- predict(Model_new, data = testing)
+
+# Appending the new values with Test data and cluster information:
+Test_predicted_data_2 <- cbind(testing, Prediction_on_test, Testing_clusters)
+
+# Finding out the averages to compare the actual values and predicted values:
+mean_Predicted_Test_2 <- Test_predicted_data_2 %>% 
+  mutate(Cluster = Testing_clusters) %>% 
+  group_by(Cluster) %>% 
+  summarise_all("mean")
+head(mean_Predicted_Test_2)
+
+
+```
+#Observations: It is clear that, on average, the predicted values in each cluster are relatively nearer to the average values for actual fuel costs. This demonstrates that making decisions based on substantial relationship and cluster information between variables improves prediction.
+
+
